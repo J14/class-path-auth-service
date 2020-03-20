@@ -20,36 +20,28 @@ class AddressSerializer(serializers.ModelSerializer):
             'created_at', 'modified_at'
         )
 
-        extra_kwargs = {
-            'profile': {'write_only': True},
-        }
-
 
 class StudentSerializer(serializers.ModelSerializer):
+    student_id = serializers.ReadOnlyField(source='id')
+
     class Meta:
+        depth = 2
         model = Student
         fields = (
-            'id', 'cpf', 'full_name',
-            'user', 'description', 'class_id',
-            'created_at', 'modified_at'
+            'student_id', 'cpf', 'user', 'description',
+            'class_id', 'created_at', 'modified_at'
         )
-
-        extra_kwargs = {
-            'user': {'write_only': True},
-        }
 
 
 class TeacherSerializer(serializers.ModelSerializer):
+    teacher_id = serializers.ReadOnlyField(source='id')
+
     class Meta:
         model = Teacher
         fields = (
-            'id', 'cpf', 'full_name', 'user', 'institution',
-            'description', 'created_at', 'modified_at'
+            'teacher_id', 'user', 'description',
+            'created_at', 'modified_at'
         )
-
-        extra_kwargs = {
-            'user': {'write_only': True},
-        }
 
 
 class AdminSerializer(serializers.ModelSerializer):
@@ -57,16 +49,12 @@ class AdminSerializer(serializers.ModelSerializer):
     class Meta:
         model = Admin
         fields = (
-            'id', 'institution', 'cpf', 'description',
-            'full_name', 'user', 'created_at', 'modified_at'
+            'id', 'institution', 'cpf', 'description', 'created_at', 'modified_at'
         )
-
-        extra_kwargs = {
-            'user': {'write_only': True},
-        }
 
 
 class UserSerializer(serializers.ModelSerializer):
+    user_id = serializers.ReadOnlyField(source='id')
     profile = serializers.SerializerMethodField(read_only=True)
     addresses = AddressSerializer(many=True, read_only=True)
     confirm_password = serializers.CharField(write_only=True)
@@ -79,9 +67,9 @@ class UserSerializer(serializers.ModelSerializer):
         model = User
         depth = 2
         fields = (
-            'id', 'addresses', 'confirm_password',
-            'registration_number', 'email', 'profile',
-            'password', 'is_teacher', 'token', 'is_student'
+            'user_id', 'email', 'registration_number', 'password',
+            'confirm_password', 'addresses', 'profile',
+            'is_teacher', 'is_student', 'is_admin', 'token'
         )
         extra_kwargs = {
             'password': {
@@ -93,41 +81,10 @@ class UserSerializer(serializers.ModelSerializer):
                 'style': {'input_type': 'password'}
             },
             'is_teacher': {'default': False},
-            'is_student': {'default': False}
+            'is_student': {'default': False},
+            'is_admin': {'default': False}
         }
 
-    def validate_password(self, value):
-        try:
-            # validate the password and catch the exception
-            validators.validate_password(password=value, user=self.instance)
-        except exceptions.ValidationError as e:
-            raise serializers.ValidationError(e.messages)
-        return value
-
-    def validate(self, data):
-        if data['password'] != data['confirm_password']:
-            raise serializers.ValidationError({
-                "confirm_password": _("Passwords don't match")
-            })
-
-        if data['is_teacher'] and data['is_student']:
-            raise serializers.ValidationError({
-                "is_teacher": _(
-                    "An User cannot be a Teacher and a Student at same time."
-                )
-            })
-
-        return super(UserSerializer, self).validate(data)
-
-    def update(self, validated_data):
-        user = super(UserSerializer, self).update(validated_data)
-        user.set_password(validated_data['password'])
-        user.save()
-        return user
-
-    def create(self, validated_data):
-        validated_data.pop("confirm_password")
-        return User.objects.create_user(**validated_data)
 
     def get_profile(self, obj):
         profile = None
@@ -136,16 +93,73 @@ class UserSerializer(serializers.ModelSerializer):
             profile = StudentSerializer(obj.student)
         elif obj.is_teacher and getattr(obj, 'teacher', None):
             profile = TeacherSerializer(obj.teacher)
-        elif obj.is_superuser and getattr(obj, 'admin', None):
+        elif obj.is_admin and getattr(obj, 'admin', None):
             profile = AdminSerializer(obj.admin)
         return profile.data if profile else {}
 
 
+class ClassSerializer(serializers.ModelSerializer):
+    program_name = serializers.CharField(source='program.name', read_only=True)
+
+    class Meta:
+        depth = 2
+        model = Class
+        fields = (
+            'id', 'name', 'description', 'program',
+            'program_name', 'created_at', 'modified_at'
+        )
+
+
+class CourseSerializer(serializers.ModelSerializer):
+    program = serializers.SerializerMethodField(read_only=True)
+
+    def get_program(self, obj):
+        return obj.class_id.program.name
+
+    class Meta:
+        depth = 2
+        model = Course
+        fields = (
+            'id', 'name', 'description', 'class_id',
+            'teacher', 'program', 'created_at', 'modified_at'
+        )
+
+
+class CourseSerializerReadOnly(CourseSerializer):
+    class Meta:
+        model = Course
+        fields = (
+            'id', 'name', 'description', 'class_id',
+            'teacher', 'created_at', 'modified_at'
+        )
+
+
+class ClassSerializerReadOnly(ClassSerializer):
+    class Meta:
+        model = Class
+        fields = (
+            'id', 'name', 'description', 'created_at', 'modified_at'
+        )
+
+
+class ProgramSerializer(serializers.ModelSerializer):
+    classes = ClassSerializerReadOnly(many=True, read_only=True)
+
+    class Meta:
+        model = Program
+        fields = (
+            'id', 'name', 'description', 'classes',
+            'created_at', 'modified_at'
+        )
+
+
 class InstitutionSerializer(serializers.ModelSerializer):
+    programs = ProgramSerializer(many=True, read_only=True)
+
     class Meta:
         model = Institution
         fields = (
-            'id', 'name', 'description',
+            'id', 'name', 'programs', 'description',
             'created_at', 'modified_at'
         )
 
@@ -158,38 +172,3 @@ class InstitutionSerializer(serializers.ModelSerializer):
         admin.save()
 
         return institution
-
-
-class ClassSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Class
-        fields = (
-            'id', 'name', 'description', 'program',
-            'created_at', 'modified_at'
-        )
-
-
-class CourseSerializer(serializers.ModelSerializer):
-    teacher = serializers.PrimaryKeyRelatedField(
-        queryset=Teacher.objects.all()
-    )
-
-    class Meta:
-        model = Course
-        fields = (
-            'id', 'name', 'description', 'class_id',
-            'teacher', 'program', 'created_at',
-            'modified_at'
-        )
-
-
-class ProgramSerializer(serializers.ModelSerializer):
-    classes = ClassSerializer(many=True, read_only=True)
-    courses = CourseSerializer(many=True, read_only=True)
-
-    class Meta:
-        model = Program
-        fields = (
-            'id', 'name', 'description', 'classes', 'institution',
-            'courses', 'created_at', 'modified_at', 'institution'
-        )
